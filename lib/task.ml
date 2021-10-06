@@ -17,9 +17,12 @@ type pool_data = {
 
 type pool = pool_data option Atomic.t
 
+let m = Mutex.create ()
 let log fmt = Printf.kprintf (fun s ->
+    Mutex.lock m;
     prerr_endline s;
-    flush stderr
+    flush stderr;
+    Mutex.unlock m;
   ) fmt
 
 let do_task f p =
