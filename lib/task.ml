@@ -1,6 +1,7 @@
 type 'a task = unit -> 'a
 
-type 'a promise = ('a, exn) result option Atomic.t
+let id = Atomic.make 0
+type 'a promise = ('a, exn) result option Atomic.t * int
 
 exception TasksActive
 
@@ -16,12 +17,21 @@ type pool_data = {
 
 type pool = pool_data option Atomic.t
 
+let log fmt = Printf.kprintf (fun s ->
+    prerr_endline s;
+    flush stderr
+  ) fmt
+
 let do_task f p =
   try
     let res = f () in
-    Atomic.set p (Some (Ok res))
+    log "setting %d" (snd p);
+    Atomic.set (fst p) (Some (Ok res));
+    log "set %d" (snd p);
   with e ->
-    Atomic.set p (Some (Error e));
+    log "setting %d err" (snd p);
+    Atomic.set (fst p) (Some (Error e));
+    log "set %d err" (snd p);
     match e with
     | TasksActive -> raise e
     | _ -> ()
@@ -61,13 +71,13 @@ let get_pool_data p =
 
 let async pool task =
   let pd = get_pool_data pool in
-  let p = Atomic.make None in
+  let p = Atomic.make None, Atomic.fetch_and_add id 1 in
   Multi_channel.send pd.task_chan (Task(task,p));
   p
 
 let rec await pool promise =
   let pd = get_pool_data pool in
-  match Atomic.get promise with
+  match Atomic.get (fst promise) with
   | None ->
       begin
         try
@@ -75,7 +85,10 @@ let rec await pool promise =
           | Task (t, p) -> do_task t p
           | Quit -> raise TasksActive
         with
-        | Exit -> Domain.Sync.cpu_relax ()
+        | Exit ->
+          log "got none/exit for %d" (snd promise);
+          Domain.Sync.cpu_relax ();
+          Domain.Sync.poll ()
       end;
       await pool promise
   | Some (Ok v) -> v
